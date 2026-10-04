@@ -178,15 +178,22 @@ never publishes.
 
 ## Releasing
 
-`.github/workflows/release.yml` publishes to npm with
-[provenance](https://docs.npmjs.com/generating-provenance-statements) when a
-GitHub release is published.
+`.github/workflows/release.yml` releases from `main`. It publishes to npm
+with [provenance](https://docs.npmjs.com/generating-provenance-statements)
+and creates the GitHub release `v<version>` with the `CHANGELOG.md` entry and
+the packed tarball attached.
 
-1. Bump `version` in `package.json` and add an entry to `CHANGELOG.md`.
+1. Bump `version` in `package.json` and add a `## <version>` entry to
+   `CHANGELOG.md`.
 2. Optional: run Actions → Release → Run workflow. It runs every check and
    `npm publish --dry-run`.
-3. Publish a GitHub release tagged `v<version>`. Versions with a prerelease
-   suffix (`0.2.0-beta.1`) go to the `next` dist-tag.
+3. Merge to `main`. A version already on npm or already tagged is skipped,
+   so ordinary merges publish nothing. Versions with a prerelease suffix
+   (`0.2.0-beta.1`) go to the `next` dist-tag and are marked as prereleases
+   on GitHub.
+
+Publishing a GitHub release by hand (tag `v<version>`) also works: the package
+is published and the tarball attached to that release.
 
 One-time setup:
 

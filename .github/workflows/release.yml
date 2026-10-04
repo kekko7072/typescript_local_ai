@@ -1,8 +1,15 @@
 name: Release
 
-# Publishes typescript_local_ai to npm when a GitHub release is published.
-# The release tag must match package.json (`v0.1.0` or `0.1.0`). Prerelease
-# versions (e.g. 0.2.0-beta.1) are published under the `next` dist-tag.
+# Releases typescript_local_ai from main. Bump `version` in package.json and
+# add a `## <version>` entry to CHANGELOG.md; when that merges, this workflow
+# runs every check, publishes the package to npm with provenance and creates
+# the GitHub release `v<version>` with that changelog entry and the packed
+# tarball attached. A push whose version is already on npm, or already
+# tagged, does nothing. Prerelease versions (0.2.0-beta.1) go to the `next`
+# dist-tag.
+#
+# Publishing a GitHub release by hand still works: the tag must match
+# package.json (`v0.1.0` or `0.1.0`), and the tarball is attached to it.
 #
 # Publishing uses npm Trusted Publishing (OIDC) with provenance, so no npm
 # token is stored. One-time setup on npmjs.com → package settings → Trusted
@@ -14,6 +21,8 @@ name: Release
 # every check and `npm publish --dry-run` without uploading.
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -26,8 +35,55 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      dist_tag: ${{ steps.plan.outputs.dist_tag }}
+      run: ${{ steps.plan.outputs.run }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          run=true publish=true tag="v$version"
+          case "$version" in *-*) dist_tag=next ;; *) dist_tag=latest ;; esac
+          case "$EVENT" in
+            release)
+              tag="$RELEASE_TAG"
+              if [ "${RELEASE_TAG#v}" != "$version" ]; then
+                echo "::error::Release tag '$RELEASE_TAG' does not match package.json version '$version'"
+                exit 1
+              fi ;;
+            workflow_dispatch) publish=false ;;
+            push)
+              if npm view "typescript_local_ai@$version" version 2>/dev/null | grep -qx "$version"; then
+                echo "::notice::typescript_local_ai@$version is already on npm; nothing to release."
+                run=false publish=false
+              elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+                echo "::notice::$tag is already tagged; its release owns the publish."
+                run=false publish=false
+              fi ;;
+          esac
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "dist_tag=$dist_tag"
+            echo "run=$run"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version tag=$tag dist_tag=$dist_tag run=$run publish=$publish"
+
   check:
     name: Check (Node ${{ matrix.node }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -43,51 +99,31 @@ jobs:
 
   dry-run:
     name: Publish dry run
-    if: github.event_name != 'release'
-    needs: check
+    needs: [plan, check]
+    if: needs.plan.outputs.publish != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Trusted Publishing needs npm >= 11.5.1, which Node 24 ships.
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - run: npm run build
-
-      - name: Check release tag matches package.json
-        id: version
+      - name: Refuse a version that is already on npm
         env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ -n "$TAG" ] && [ "${TAG#v}" != "$version" ]; then
-            echo "::error::Release tag '$TAG' does not match package.json version '$version'"
-            exit 1
-          fi
-          case "$version" in
-            *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT" ;;
-            *)   echo "dist_tag=latest" >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      - name: Refuse to republish an existing version
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           if npm view "typescript_local_ai@$VERSION" version 2>/dev/null | grep -qx "$VERSION"; then
             echo "::error::typescript_local_ai@$VERSION is already on npm"
             exit 1
           fi
-
-      - run: npm publish --dry-run --tag ${{ steps.version.outputs.dist_tag }}
+      - run: npm publish --dry-run --tag ${{ needs.plan.outputs.dist_tag }}
 
   publish:
     name: Publish to npm
-    if: github.event_name == 'release'
-    needs: check
+    needs: [plan, check]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Add required reviewers to this environment to gate every release.
     environment:
@@ -105,33 +141,23 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - run: npm run build
-
-      - name: Check release tag matches package.json
-        id: version
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ -n "$TAG" ] && [ "${TAG#v}" != "$version" ]; then
-            echo "::error::Release tag '$TAG' does not match package.json version '$version'"
-            exit 1
-          fi
-          case "$version" in
-            *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT" ;;
-            *)   echo "dist_tag=latest" >> "$GITHUB_OUTPUT" ;;
-          esac
-
       - name: Refuse to republish an existing version
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           if npm view "typescript_local_ai@$VERSION" version 2>/dev/null | grep -qx "$VERSION"; then
             echo "::error::typescript_local_ai@$VERSION is already on npm"
             exit 1
           fi
-
+      - run: npm run build
+      - name: Pack the tarball attached to the GitHub release
+        run: |
+          mkdir -p dist-pack
+          npm pack --pack-destination dist-pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: dist-pack/*.tgz
       - name: Publish
         env:
           # Optional: only needed for the very first publish, before the
@@ -139,4 +165,37 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -n "$NPM_TOKEN" ]; then export NODE_AUTH_TOKEN="$NPM_TOKEN"; fi
-          npm publish --provenance --access public --tag ${{ steps.version.outputs.dist_tag }}
+          npm publish --provenance --access public --tag ${{ needs.plan.outputs.dist_tag }}
+
+  github-release:
+    name: GitHub release
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and release, upload assets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarball
+          path: dist
+      - name: Create the release, or attach assets to the one being published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
+        run: |
+          bash .github/scripts/release-notes.sh "$VERSION" CHANGELOG.md > notes.md
+          cat notes.md
+          if [ "$EVENT" = release ]; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            prerelease=()
+            [ "$DIST_TAG" = next ] && prerelease=(--prerelease)
+            gh release create "$TAG" dist/* "${prerelease[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "typescript_local_ai $VERSION" \
+              --notes-file notes.md
+          fi
