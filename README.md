@@ -176,6 +176,33 @@ npm run check   # typecheck, unit tests, build, publint, smoke-import every subp
 CI runs the same steps on Node 20, 22 and 24, followed by a pack dry run. CI
 never publishes.
 
+## Releasing
+
+`.github/workflows/release.yml` publishes to npm with
+[provenance](https://docs.npmjs.com/generating-provenance-statements) when a
+GitHub release is published.
+
+1. Bump `version` in `package.json` and add an entry to `CHANGELOG.md`.
+2. Optional: run Actions → Release → Run workflow. It runs every check and
+   `npm publish --dry-run`.
+3. Publish a GitHub release tagged `v<version>`. Versions with a prerelease
+   suffix (`0.2.0-beta.1`) go to the `next` dist-tag.
+
+One-time setup:
+
+- Create a GitHub environment named `npm` (adding required reviewers is
+  recommended).
+- **First publish:** npm can only attach a Trusted Publisher to a package that
+  already exists. Add a granular npm access token as the `NPM_TOKEN` secret of
+  the `npm` environment for the first release.
+- **After that:** on npmjs.com → `typescript_local_ai` → Settings → Trusted
+  Publisher, add GitHub Actions with owner `kekko7072`, repository
+  `typescript_local_ai`, workflow `release.yml` and environment `npm`. Then
+  delete the `NPM_TOKEN` secret; later releases use OIDC with no stored token.
+
+The workflow refuses a tag that differs from `package.json` and a version that
+is already on npm.
+
 ## License
 
 MIT
