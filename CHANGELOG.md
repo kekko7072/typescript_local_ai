@@ -4,7 +4,7 @@ All notable changes to `typescript_local_ai` are documented here. The project
 follows [Semantic Versioning](https://semver.org); while it is `0.x`, minor
 versions may contain breaking changes.
 
-## 0.1.0 — unreleased
+## 0.1.0
 
 First release.
 
